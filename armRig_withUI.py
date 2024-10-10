@@ -14,29 +14,37 @@ class ArmRigUI(object):
 
         with pm.window(self.window_name, title="Arm Rig Tool"):
             with pm.columnLayout(adjustableColumn=True, rowSpacing=5):
+                pm.separator(height=5, style='none')
+
+                # Adding the usage note                            # Adding a frame to make the usage note more noticeable
+                pm.text(label="Step1: Please select joints in order Arm -> Forearm -> Hand",
+                        align='center', wordWrap=True, 
+                        font="boldLabelFont")  # Bold font for visibility
+                    
+                
                 with pm.rowLayout(numberOfColumns=3, columnWidth3=(80, 150, 30), adjustableColumn=2):
                     pm.text(label="Arm Joints")
                     self.arm_joints_field = pm.textField(editable=False)
                     pm.button(label="<<", command=pm.Callback(self.select_arm_joints))
                 
-                pm.separator(height=10, style='double')
+                pm.separator(height=5, style='double')
+                # Adding the usage note                            # Adding a frame to make the usage note more noticeable
+                pm.text(label="Step2: Please select Roll joints",
+                        align='center', wordWrap=True, 
+                        font="boldLabelFont")  # Bold font for visibility
                 
                 with pm.rowLayout(numberOfColumns=3, columnWidth3=(80, 150, 30), adjustableColumn=2):
                     pm.text(label="Roll Joints")
                     self.roll_joints_field = pm.textField(editable=False)
                     pm.button(label="<<", command=pm.Callback(self.select_roll_joints))
                 
+
+
                 pm.separator(height=10, style='double')
-                pm.button(label="Build Arm Rig", command=self.build_arm_rig)
-                pm.button(label="Delete Arm Rig", command=self.destroy_arm_rig)
+                pm.button(label="Build Arm Rig", command=pm.Callback(self.create_arm_rig))
+                pm.button(label="Delete Arm Rig", command=pm.Callback(self.delete_arm_rig))
 
         pm.showWindow()
-
-    def build_arm_rig(self, *args):
-        self.create_arm_rig()
-    
-    def destroy_arm_rig(self, *args):
-        self.delete_arm_rig()
 
     def select_arm_joints(self):
         selection = pm.ls(selection=True, type="joint")
@@ -60,20 +68,25 @@ class ArmRigUI(object):
         selection = pm.ls(selection=True, type="joint")
         if selection:
             self.roll_joints = selection
+            # check if arm joints are part of roll joints lol!
+            if bool(set(self.roll_joints) & set(self.arm_joints)):
+                pm.warning("Dont select arm joints as roll joints")
+                return
             joint_names = ", ".join([joint.name() for joint in selection])
             self.roll_joints_field.setText(joint_names)
         else:
             pm.warning("Please select at least one roll joint")
+
 
     def create_arm_rig(self):
         arm_joints = self.arm_joints
         roll_joints = self.roll_joints
 
         if len(arm_joints) != 3:
-            pm.warning("Please select exactly 3 arm joints (arm -> forearm -> hand)")
+            pm.warning("Please fill all fields")
             return
         if not roll_joints:
-            pm.warning("Please select Roll joints")
+            pm.warning("Please fill Roll joints")
             return
         
         # Make sure rig is not created yet
@@ -187,6 +200,10 @@ class ArmRigUI(object):
         # Hide & lock translate and rotate attributes
         for attr in ['scaleX', 'scaleY', 'scaleZ']:
             pm.setAttr(handIK_control + '.' + attr, keyable=False, channelBox=False, lock=True)
+        # hide ik joints and handle
+        for ik_joint in ik_joints:
+            ik_joint.v.set(0)
+        ik_handle.v.set(0)
 
         # Create IKFK switch
         switch_control = create_custom_triangle(name="IKFK_Switch_" + arm.nodeName() + "_Ctrl", size=10.0, color=(0, 1, 0), thickness=2)
@@ -231,8 +248,7 @@ class ArmRigUI(object):
         pm.setDrivenKeyframe(loc_control.visibility, cd=switch_attr, dv=1, v=1) # attr 1 IK visible
         pm.setDrivenKeyframe(loc_control.visibility, cd=switch_attr, dv=0, v=0) # attr 0 IK hidden
 
-        #find roll joints
-        # roll_joints = find_roll_joints(forearm)
+        #sort roll joints cuz we don't believe in names
         sorted_roll_joints = sort_roll_joints_by_distance(roll_joints, forearm)
         num_of_joints = len(roll_joints)
         frac = generate_roll_fractions(len(roll_joints), max_value=0.75,min_value= 0.25)[::-1]
@@ -248,7 +264,7 @@ class ArmRigUI(object):
             pm.connectAttr(hand + '.rotateX', mult_node + '.input1X')
             # Connect the outputX of the multiplyDivide node to the joint's rotateX
             pm.connectAttr(mult_node + '.outputX', joint + '.rotateX')
-        
+
         pm.displayInfo("Arm rig was built successfully.")
 
 
@@ -262,11 +278,12 @@ class ArmRigUI(object):
                 for joint in roll_joints:
                     delete_nodes_containing(joint.nodeName(),'multiplyDivide')
                 delete_nodes_containing(arm_joints[0].nodeName() + "_Rig", 'transform')
+                # except solvers actually but they can be shared among other rigs in the scene so leave them be
                 pm.displayInfo("Arm Rig was deleted")
             else:
                 pm.warning("Arm Rig does not exist")
         else:
-                pm.warning("Please fill all fields")
+            pm.warning("Please fill all fields")
 
     def ask_rebuild_rig(self):
         # Create a confirm dialog
@@ -364,13 +381,6 @@ def create_custom_triangle(name, size=10.0, color=(0, 1, 0), thickness=2):
     pm.xform(nurbs_triangle, centerPivots=True)
     return nurbs_triangle
 
-# def find_roll_joints(parent_joint):
-#     # Get all descendants of the arm_joints joint
-#     descendants = pm.listRelatives(parent_joint, allDescendents=True, type='joint')
-#     # Filter joints containing 'roll' in their name
-#     roll_joints = [joint for joint in descendants if 'Roll' in joint.nodeName()]
-#     return roll_joints
-
 def calculate_distance(obj1, obj2):
     """Calculate the distance between two objects in world space."""
     pos1 = pm.xform(obj1, q=True, ws=True, t=True)
@@ -380,12 +390,14 @@ def calculate_distance(obj1, obj2):
             (pos1[2] - pos2[2])**2) ** 0.5
 
 def sort_roll_joints_by_distance(roll_joints, forearm_joint):
-    """Sort roll joints based on their distance to the forearm joint."""
     return sorted(roll_joints, key=lambda joint: calculate_distance(joint, forearm_joint))
 
 def generate_roll_fractions(num_joints, max_value=0.75, min_value=0.15):
-    step = (max_value - min_value) / (num_joints - 1)
-    fractions = [max_value - i * step for i in range(num_joints)]
+    if num_joints == 1:
+        fractions = [0.5]
+    else:
+        step = (max_value - min_value) / (num_joints - 1)
+        fractions = [max_value - i * step for i in range(num_joints)]
     return fractions
 
 def delete_nodes_containing(substring, node_type=None):
