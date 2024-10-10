@@ -31,7 +31,7 @@ def create_custom_circle(radius=14.0, sections=8, color=(1, 0, 0), thickness=2):
     
     return circle_curve
 
-def create_custom_cube(name="hand_control", size=10.0, color=(1, 1, 0), thickness=2):
+def create_custom_cube(name, size=10.0, color=(1, 1, 0), thickness=2):
     # Create the NURBS cube
     nurbs_cube = pm.curve(n = name, d=1, p=[(-0.5, 0.5, 0.5), (-0.5, 0.5, -0.5), (0.5, 0.5, -0.5), (0.5, 0.5, 0.5), (-0.5, 0.5, 0.5), (-0.5, -0.5, 0.5), (-0.5, -0.5, -0.5), (0.5, -0.5, -0.5), (0.5, -0.5, 0.5), (-0.5, -0.5, 0.5), (-0.5, 0.5, 0.5), (0.5, 0.5, 0.5), (0.5, -0.5, 0.5), (0.5, -0.5, -0.5), (0.5, 0.5, -0.5), (-0.5, 0.5, -0.5), (-0.5, -0.5, -0.5)], k=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16])
 
@@ -80,10 +80,53 @@ def find_roll_joints(parent_joint):
     roll_joints = [joint for joint in descendants if 'Roll' in joint.nodeName()]
     return roll_joints
 
+def calculate_distance(obj1, obj2):
+    """Calculate the distance between two objects in world space."""
+    pos1 = pm.xform(obj1, q=True, ws=True, t=True)
+    pos2 = pm.xform(obj2, q=True, ws=True, t=True)
+    return ((pos1[0] - pos2[0])**2 + 
+            (pos1[1] - pos2[1])**2 + 
+            (pos1[2] - pos2[2])**2) ** 0.5
+
+def sort_roll_joints_by_distance(roll_joints, forearm_joint):
+    """Sort roll joints based on their distance to the forearm joint."""
+    return sorted(roll_joints, key=lambda joint: calculate_distance(joint, forearm_joint))
+
 def generate_roll_fractions(num_joints, max_value=0.75, min_value=0.15):
     step = (max_value - min_value) / (num_joints - 1)
     fractions = [max_value - i * step for i in range(num_joints)]
     return fractions
+
+def delete_nodes_containing(substring, node_type=None):
+    # Find all nodes of the specified type, or all nodes if no type is provided
+    if node_type:
+        nodes = pm.ls(type=node_type)
+    else:
+        nodes = pm.ls()
+
+    # Iterate through the nodes and delete those that contain the substring
+    for node in nodes:
+        # Use the string name of the node for the substring check
+        if substring in str(node.name()):
+            pm.delete(node)
+
+def ask_rebuild_rig():
+    # Create a confirm dialog
+    result = pm.confirmDialog(
+        title='Rebuild Rig',
+        message='Arm Rig already exists. Do you want to rebuild it?',
+        button=['Yes', 'No'],
+        defaultButton='No',
+        cancelButton='No',
+        dismissString='No'
+    )
+    # Check the user's response
+    if result == 'Yes':
+        pm.displayInfo("Rebuilding Arm Rig...")
+        return True
+    else:
+        pm.displayInfo("Canceled. Arm Rig will not be rebuilt.")
+        return False
 
 def create_arm_rig():
     # Make sure selection is somewhat correct
@@ -96,14 +139,19 @@ def create_arm_rig():
         pm.warning("Please select arm -> forearm -> hand")
         return
     # Make sure rig is not created yet
-    tmp_name = selected[0].nodeName() + "_Rig"
-    group_object = pm.ls(tmp_name, type='transform')
-    if group_object:
-        pm.warning("Rig already exists")
-        # Here cleanup shall happen but I won't do this scenario
-        return
+    if pm.ls(selected[0].nodeName() + "_Rig", type='transform'):
+        pm.warning("Arm Rig already exists")
+        if not ask_rebuild_rig():
+            # Stop function if user cancels
+            return
+        else:
+            # Delete existing rig
+            roll_joints = find_roll_joints(selected[0])
+            for joint in roll_joints:
+                delete_nodes_containing(joint.nodeName(),'multiplyDivide')
+            delete_nodes_containing(selected[0].nodeName() + "_Rig", 'transform')
 
-    # Store joints for easy access
+    # Store joints for ease of read =)
     arm = selected[0]
     forearm = selected[1]
     hand = selected[2]
@@ -246,26 +294,24 @@ def create_arm_rig():
     pm.setDrivenKeyframe(loc_control.visibility, cd=switch_attr, dv=1, v=1) # attr 1 IK visible
     pm.setDrivenKeyframe(loc_control.visibility, cd=switch_attr, dv=0, v=0) # attr 0 IK hidden
 
+    #find roll joints
     roll_joints = find_roll_joints(forearm)
-
-    print(roll_joints)
-    # List of roll joints (replace with the actual names of your joints)
+    sorted_roll_joints = sort_roll_joints_by_distance(roll_joints, forearm)
     num_of_joints = len(roll_joints)
     frac = generate_roll_fractions(len(roll_joints), max_value=0.75,min_value= 0.25)[::-1]
     
-    for i, joint in enumerate(roll_joints):
+    for i, joint in enumerate(sorted_roll_joints):
         # Create a multiplyDivide node for each roll joint
         mult_node = pm.createNode('multiplyDivide', name= joint + '_rotationMult')
-        
         # Set the multiply operation
         mult_node.operation.set(1)  # 1 = Multiply
         # Set the input2X to the fraction for this roll joint
         mult_node.input2X.set(frac[i])
-        
         # Connect the driver control's rotateX to the input1X of the multiplyDivide node
         pm.connectAttr(hand + '.rotateX', mult_node + '.input1X')
-        
         # Connect the outputX of the multiplyDivide node to the joint's rotateX
         pm.connectAttr(mult_node + '.outputX', joint + '.rotateX')
+    
+    pm.displayInfo("Arm rig was built successfully.")
 
 create_arm_rig()
