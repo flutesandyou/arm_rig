@@ -1,5 +1,9 @@
+# created by Maksim Petrov, tested in Maya 2019
+# github.com/flutesandyou/arm_rig
+# Usage: copy-paste to python script editor.
+
 import pymel.core as pm
-import sys
+
 class ArmRigUI(object):
     def __init__(self):
         self.window_name = "ArmRig_Tool"
@@ -264,6 +268,9 @@ class ArmRigUI(object):
             pm.connectAttr(hand + '.rotateX', mult_node + '.input1X')
             # Connect the outputX of the multiplyDivide node to the joint's rotateX
             pm.connectAttr(mult_node + '.outputX', joint + '.rotateX')
+        
+        # fix rotation order of hand
+        hand.rotateOrder.set(5)
 
         pm.displayInfo("Arm rig was built successfully.")
 

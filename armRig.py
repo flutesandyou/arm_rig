@@ -1,5 +1,8 @@
+# created by Maksim Petrov, tested in Maya 2019
+# github.com/flutesandyou/arm_rig
+# Usage: copy-paste to python script editor.
+
 import pymel.core as pm
-import sys
 
 def create_custom_locator(name, size=3.0, color=(1, 0, 0)):
     # Create the locator
@@ -312,6 +315,8 @@ def create_arm_rig():
         # Connect the outputX of the multiplyDivide node to the joint's rotateX
         pm.connectAttr(mult_node + '.outputX', joint + '.rotateX')
     
+    # fix rotation order of hand
+    hand.rotateOrder.set(5)
     pm.displayInfo("Arm rig was built successfully.")
 
 create_arm_rig()
