@@ -79,7 +79,7 @@ class ArmRigUI(object):
             joint_names = ", ".join([joint.name() for joint in selection])
             self.roll_joints_field.setText(joint_names)
         else:
-            pm.warning("Please select at least one roll joint")
+            self.roll_joints_field.setText('')
 
 
     def create_arm_rig(self):
@@ -88,9 +88,6 @@ class ArmRigUI(object):
 
         if len(arm_joints) != 3:
             pm.warning("Please fill all fields")
-            return
-        if not roll_joints:
-            pm.warning("Please fill Roll joints")
             return
         
         # Make sure rig is not created yet
@@ -101,8 +98,9 @@ class ArmRigUI(object):
                 return
             else:
                 # Delete existing rig
-                for joint in roll_joints:
-                    delete_nodes_containing(joint.nodeName(),'multiplyDivide')
+                if roll_joints:
+                    for joint in roll_joints:
+                        delete_nodes_containing(joint.nodeName(),'multiplyDivide')
                 delete_nodes_containing(arm_joints[0].nodeName() + "_Rig", 'transform')
 
         # Store joints for ease of read =)
@@ -177,10 +175,9 @@ class ArmRigUI(object):
 
         # Create locator for pole vector
         loc_control = create_custom_locator(name='IK_Pole_' + forearm.nodeName() + '_Ctrl', size=3.0, color=(1, 0, 0))
-        loc_group = pm.group(loc_control, n="IK_Pole_" + forearm.nodeName() + "_Offset")
-        loc_group.setMatrix(forearm.getMatrix(worldSpace=True), worldSpace=True)
+        loc_group = create_bisector_group("IK_Pole_" + forearm.nodeName() + "_Offset", arm, forearm, hand)
         #shift locator a bit back
-        pm.xform(loc_control, rotation=(0, 0, 0), translation=(-15, 0, -40))
+        pm.xform(loc_control, rotation=(0, 0, 0), translation=(0, 0, -calculate_distance(arm, hand)))
         pm.makeIdentity(loc_control, apply=True, translate=True, normal=False)
         
         # Wierd stuff but it does the trick
@@ -188,7 +185,7 @@ class ArmRigUI(object):
         grp.setTranslation(forearm.getTranslation(worldSpace=True), worldSpace=True)
         pm.parent(grp, loc_group)
         pm.parent(loc_control, grp)
-        pm.xform(loc_control, rotation=(0, 0, 0))
+        pm.xform(loc_control, rotation=(0, 0, 0), translation=(0, 0, 0))
 
         # Create the pole vector constraint
         pm.poleVectorConstraint(loc_control, ik_handle)
@@ -213,7 +210,11 @@ class ArmRigUI(object):
         switch_control = create_custom_triangle(name="IKFK_Switch_" + arm.nodeName() + "_Ctrl", size=10.0, color=(0, 1, 0), thickness=2)
         switch_group = pm.group(switch_control, n="IKFK_Switch_"  + arm.nodeName() + "_Offset")
         # Reposition the switch
-        switch_group.translate.set(arm.translate.get() + (40,0,0))
+        if is_object_on_positive_x(hand):
+            switch_group.setTranslation(arm.getTranslation(worldSpace=True) + (calculate_distance(arm, hand)/2,0,0), worldSpace=True)
+        else:
+            switch_group.setTranslation(arm.getTranslation(worldSpace=True) + (-calculate_distance(arm, hand)/2,0,0), worldSpace=True)
+
         # Hide & lock translate, rotate, and scale attributes
         for attr in ['translateX', 'translateY', 'translateZ', 'rotateX', 'rotateY', 'rotateZ', 'scaleX', 'scaleY', 'scaleZ']:
             pm.setAttr(switch_control + '.' + attr, keyable=False, channelBox=False, lock=True)
@@ -252,22 +253,23 @@ class ArmRigUI(object):
         pm.setDrivenKeyframe(loc_control.visibility, cd=switch_attr, dv=1, v=1) # attr 1 IK visible
         pm.setDrivenKeyframe(loc_control.visibility, cd=switch_attr, dv=0, v=0) # attr 0 IK hidden
 
-        #sort roll joints cuz we don't believe in names
-        sorted_roll_joints = sort_roll_joints_by_distance(roll_joints, forearm)
-        num_of_joints = len(roll_joints)
-        frac = generate_roll_fractions(len(roll_joints), max_value=0.75,min_value= 0.25)[::-1]
-        
-        for i, joint in enumerate(sorted_roll_joints):
-            # Create a multiplyDivide node for each roll joint
-            mult_node = pm.createNode('multiplyDivide', name= joint + '_rotationMult')
-            # Set the multiply operation
-            mult_node.operation.set(1)  # 1 = Multiply
-            # Set the input2X to the fraction for this roll joint
-            mult_node.input2X.set(frac[i])
-            # Connect the driver control's rotateX to the input1X of the multiplyDivide node
-            pm.connectAttr(hand + '.rotateX', mult_node + '.input1X')
-            # Connect the outputX of the multiplyDivide node to the joint's rotateX
-            pm.connectAttr(mult_node + '.outputX', joint + '.rotateX')
+        if roll_joints:
+            #sort roll joints cuz we don't believe in names
+            sorted_roll_joints = sort_roll_joints_by_distance(roll_joints, forearm)
+            num_of_joints = len(roll_joints)
+            frac = generate_roll_fractions(len(roll_joints), max_value=0.75,min_value= 0.25)[::-1]
+            
+            for i, joint in enumerate(sorted_roll_joints):
+                # Create a multiplyDivide node for each roll joint
+                mult_node = pm.createNode('multiplyDivide', name= joint + '_rotationMult')
+                # Set the multiply operation
+                mult_node.operation.set(1)  # 1 = Multiply
+                # Set the input2X to the fraction for this roll joint
+                mult_node.input2X.set(frac[i])
+                # Connect the driver control's rotateX to the input1X of the multiplyDivide node
+                pm.connectAttr(hand + '.rotateX', mult_node + '.input1X')
+                # Connect the outputX of the multiplyDivide node to the joint's rotateX
+                pm.connectAttr(mult_node + '.outputX', joint + '.rotateX')
         
         # fix rotation order of hand
         hand.rotateOrder.set(5)
@@ -280,17 +282,16 @@ class ArmRigUI(object):
         arm_joints = self.arm_joints
         roll_joints = self.roll_joints
         
-        if roll_joints and arm_joints:
+        if arm_joints:
             if pm.ls(arm_joints[0].nodeName() + "_Rig", type='transform'):
-                for joint in roll_joints:
-                    delete_nodes_containing(joint.nodeName(),'multiplyDivide')
+                if roll_joints:
+                    for joint in roll_joints:
+                        delete_nodes_containing(joint.nodeName(),'multiplyDivide')
                 delete_nodes_containing(arm_joints[0].nodeName() + "_Rig", 'transform')
                 # except solvers actually but they can be shared among other rigs in the scene so leave them be
                 pm.displayInfo("Arm Rig was deleted")
             else:
                 pm.warning("Arm Rig does not exist")
-        else:
-            pm.warning("Please fill all fields")
 
     def ask_rebuild_rig(self):
         # Create a confirm dialog
@@ -314,6 +315,60 @@ class ArmRigUI(object):
 # Create and show the UI
 armrigtool = ArmRigUI()
 armrigtool.create_ui()
+
+
+def is_object_on_positive_x(obj):
+    # Get the world space position of the object
+    position = pm.xform(obj, q=True, ws=True, t=True)
+    
+    # Check the X component of the position
+    if position and len(position) == 3:  # Ensure the position is valid
+        return position[0] > 0  # Return True if on positive X, False otherwise
+    else:
+        pm.warning("Invalid object position or object does not exist.")
+        return None  # Return None if the position is invalid
+
+def create_bisector_group(name, joint1, joint2, joint3):
+    # Get the positions of the joints
+    pos1 = pm.datatypes.Vector(pm.xform(joint1, query=True, worldSpace=True, translation=True))
+    pos2 = pm.datatypes.Vector(pm.xform(joint2, query=True, worldSpace=True, translation=True))
+    pos3 = pm.datatypes.Vector(pm.xform(joint3, query=True, worldSpace=True, translation=True))
+
+    # Calculate vectors
+    vec1 = pos1 - pos2
+    vec2 = pos3 - pos2
+
+    # Normalize vectors
+    vec1_norm = vec1.normal()
+    vec2_norm = vec2.normal()
+
+    # Calculate bisector vector
+    bisector = (vec1_norm + vec2_norm).normal()
+
+    # Calculate the normal to the plane (using cross product)
+    normal = vec1_norm.cross(vec2_norm).normal()
+
+    # Calculate the right vector
+    right = normal.cross(bisector).normal()
+
+    # Create group
+    group = pm.group(empty=True, name=name)
+
+    # Position group at the middle joint
+    pm.xform(group, worldSpace=True, translation=pos2)
+
+    # Create a transformation matrix
+    rotation_matrix = pm.datatypes.Matrix(
+        right.x, right.y, right.z, 0,
+        normal.x, normal.y, normal.z, 0,
+        bisector.x, bisector.y, bisector.z, 0,
+        0, 0, 0, 1
+    )
+
+    # Apply rotation to the group
+    pm.xform(group, worldSpace=True, matrix=rotation_matrix)
+
+    return group
 
 # Utility standalone functions better be in separate module
 def create_custom_locator(name, size=3.0, color=(1, 0, 0)):
